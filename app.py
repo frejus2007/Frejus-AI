@@ -18,46 +18,45 @@ st.set_page_config(
     layout="centered"
 )
 
-# Configuration Supabase
-# En production, mettez ces valeurs dans Streamlit Secrets
+# Configuration Supabase et Groq
 SUPABASE_URL = os.getenv("SUPABASE_URL") or st.secrets.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY") or st.secrets.get("SUPABASE_KEY", "")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY") or st.secrets.get("GROQ_API_KEY", "")
 
-# Vérifier la configuration Supabase
+# Vérifier la configuration
 if not SUPABASE_URL or not SUPABASE_KEY:
-    st.error("⚠️ Configuration Supabase manquante. Ajoutez SUPABASE_URL et SUPABASE_KEY dans les secrets Streamlit.")
+    st.error("⚠️ Configuration Supabase manquante.")
     st.info("""
-    ### Comment configurer les secrets Streamlit :
-    
-    1. Dans Streamlit Cloud, allez dans les **Settings** de votre app
-    2. Section **Secrets**
-    3. Ajoutez :
+    ### Ajoutez dans les secrets Streamlit :
     ```toml
-    SUPABASE_URL = "votre_url_supabase"
-    SUPABASE_KEY = "votre_clé_anon_publique"
+    SUPABASE_URL = "votre_url"
+    SUPABASE_KEY = "votre_clé"
+    GROQ_API_KEY = "votre_clé_groq"
     ```
     """)
     st.stop()
 
-# Initialiser le client Supabase
+if not GROQ_API_KEY:
+    st.error("⚠️ Clé API Groq manquante dans les secrets Streamlit.")
+    st.stop()
+
+# Initialiser Supabase
 @st.cache_resource
 def init_supabase():
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
 supabase: Client = init_supabase()
 
-# Fonctions d'authentification avec Supabase
+# Fonctions d'authentification
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
 def register_user(username, password, email):
     try:
-        # Vérifier si l'utilisateur existe
         result = supabase.table('users').select('*').eq('username', username).execute()
         if result.data:
             return False, "Nom d'utilisateur déjà pris"
         
-        # Créer l'utilisateur
         user_data = {
             'username': username,
             'password_hash': hash_password(password),
@@ -66,7 +65,6 @@ def register_user(username, password, email):
         result = supabase.table('users').insert(user_data).execute()
         
         if result.data:
-            # Créer une première conversation
             user_id = result.data[0]['id']
             supabase.table('conversations').insert({
                 'user_id': user_id,
@@ -142,20 +140,6 @@ def rename_conversation(conversation_id, new_name):
     except:
         return False
 
-def update_user_api_key(user_id, api_key):
-    try:
-        supabase.table('users').update({'api_key': api_key}).eq('id', user_id).execute()
-        return True
-    except:
-        return False
-
-def get_user_api_key(user_id):
-    try:
-        result = supabase.table('users').select('api_key').eq('id', user_id).execute()
-        return result.data[0]['api_key'] if result.data else None
-    except:
-        return None
-
 # Initialiser l'état de session
 if 'authenticated' not in st.session_state:
     st.session_state.authenticated = False
@@ -175,7 +159,7 @@ if not st.session_state.authenticated:
     
     st.markdown("---")
     
-    st.success("✅ **Version Production** : Base de données Supabase - Vos données sont sauvegardées de façon permanente !")
+    st.success("✅ **Gratuit et sans limite** : Aucune clé API requise, utilisez Frejus AI librement !")
     
     tab1, tab2 = st.tabs(["🔐 Connexion", "📝 Inscription"])
     
@@ -184,7 +168,7 @@ if not st.session_state.authenticated:
         login_username = st.text_input("Nom d'utilisateur", key="login_user")
         login_password = st.text_input("Mot de passe", type="password", key="login_pass")
         
-        if st.button("Se connecter", type="primary"):
+        if st.button("Se connecter", type="primary", use_container_width=True):
             if login_username and login_password:
                 success, message, user_id = login_user(login_username, login_password)
                 if success:
@@ -199,13 +183,13 @@ if not st.session_state.authenticated:
                 st.warning("Veuillez remplir tous les champs")
     
     with tab2:
-        st.subheader("Créer un compte")
+        st.subheader("Créer un compte gratuit")
         reg_username = st.text_input("Nom d'utilisateur", key="reg_user", help="Minimum 3 caractères")
         reg_email = st.text_input("Email", key="reg_email")
         reg_password = st.text_input("Mot de passe", type="password", key="reg_pass", help="Minimum 6 caractères")
         reg_password2 = st.text_input("Confirmer mot de passe", type="password", key="reg_pass2")
         
-        if st.button("S'inscrire", type="primary"):
+        if st.button("S'inscrire gratuitement", type="primary", use_container_width=True):
             if reg_username and reg_email and reg_password and reg_password2:
                 if len(reg_username) < 3:
                     st.error("Le nom d'utilisateur doit contenir au moins 3 caractères")
@@ -219,7 +203,8 @@ if not st.session_state.authenticated:
                     success, message = register_user(reg_username, reg_password, reg_email)
                     if success:
                         st.success(message)
-                        st.info("✅ Vous pouvez maintenant vous connecter !")
+                        st.balloons()
+                        st.info("✅ Connectez-vous maintenant pour commencer !")
                     else:
                         st.error(message)
             else:
@@ -227,22 +212,20 @@ if not st.session_state.authenticated:
     
     st.markdown("---")
     st.markdown("""
-    ### 🎯 Fonctionnalités de Frejus AI
+    ### 🎯 Pourquoi choisir Frejus AI ?
     
-    - 💬 **Conversations intelligentes** : Posez n'importe quelle question
-    - 💻 **Mode Codage** : Code propre et optimisé
-    - 🎨 **Mode Design** : Interfaces modernes avec animations
-    - 📝 **Multi-conversations** : Organisez vos discussions
-    - 💾 **Sauvegarde permanente** : Données stockées dans Supabase
-    - 🔐 **Sécurisé** : Vos données sont protégées
-    - ☁️ **Accessible partout** : Connectez-vous de n'importe où
+    - 💬 **Conversations illimitées** : Discutez sans restrictions
+    - 💻 **Mode Codage Expert** : Code propre et optimisé
+    - 🎨 **Mode Design Créatif** : Interfaces modernes avec animations
+    - 📝 **Sauvegarde automatique** : Ne perdez jamais vos conversations
+    - 🔐 **100% Sécurisé** : Vos données sont protégées
+    - 🆓 **Totalement gratuit** : Pas de carte bancaire requise
+    - ☁️ **Accessible partout** : Sur tous vos appareils
     """)
     
     st.stop()
 
-# Interface principale (après authentification)
-
-# Charger les conversations de l'utilisateur
+# Interface principale
 if 'conversations' not in st.session_state or st.session_state.get('reload_conversations', True):
     conversations_data = get_user_conversations(st.session_state.user_id)
     st.session_state.conversations = {conv['id']: conv['name'] for conv in conversations_data}
@@ -258,10 +241,10 @@ with col1:
     st.image("https://api.dicebear.com/7.x/bottts/svg?seed=frejus", width=80)
 with col2:
     st.title("🧠 Frejus AI")
-    st.markdown("*Votre assistant intelligent - Version Production*")
+    st.markdown("*Assistant intelligent propulsé par Groq*")
 with col3:
     st.markdown(f"👤 **{st.session_state.username}**")
-    if st.button("🚪 Déconnexion", key="logout"):
+    if st.button("🚪", key="logout", help="Déconnexion"):
         st.session_state.authenticated = False
         st.session_state.username = None
         st.session_state.user_id = None
@@ -271,43 +254,55 @@ with col3:
 with st.sidebar:
     st.header("⚙️ Configuration")
     
-    # Clé API
-    saved_api_key = get_user_api_key(st.session_state.user_id)
-    api_key = st.text_input("Clé API Groq", value=saved_api_key or '', type="password", help="Gratuit sur https://console.groq.com")
-    
-    if api_key and api_key != saved_api_key:
-        update_user_api_key(st.session_state.user_id, api_key)
+    st.success("✅ **API activée** : Prêt à l'emploi !")
     
     st.markdown("---")
-    st.markdown("### 📚 Modèles")
+    st.markdown("### 📚 Mode de conversation")
     
     model_category = st.radio(
         "Catégorie",
-        ["💬 Conversation", "💻 Codage", "🎨 Design"],
+        ["💬 Conversation générale", "💻 Codage expert", "🎨 Design créatif"],
         label_visibility="collapsed"
     )
     
-    if model_category == "💬 Conversation":
-        model = st.selectbox("Modèle", ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768", "gemma2-9b-it"])
+    if model_category == "💬 Conversation générale":
+        model = st.selectbox(
+            "Modèle IA", 
+            ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768", "gemma2-9b-it"],
+            help="Modèles optimisés pour la conversation"
+        )
         st.session_state.code_mode = False
         st.session_state.design_mode = False
-    elif model_category == "💻 Codage":
-        model = st.selectbox("Modèle", ["llama-3.3-70b-versatile", "mixtral-8x7b-32768"])
+    elif model_category == "💻 Codage expert":
+        model = st.selectbox(
+            "Modèle IA", 
+            ["llama-3.3-70b-versatile", "mixtral-8x7b-32768"],
+            help="Modèles spécialisés en programmation"
+        )
         st.session_state.code_mode = True
         st.session_state.design_mode = False
-        st.info("🔧 Mode codage")
+        st.info("🔧 **Mode actif** : Code propre, commenté et optimisé")
     else:
-        model = st.selectbox("Modèle", ["llama-3.3-70b-versatile", "mixtral-8x7b-32768"])
+        model = st.selectbox(
+            "Modèle IA", 
+            ["llama-3.3-70b-versatile", "mixtral-8x7b-32768"],
+            help="Modèles créatifs pour le design"
+        )
         st.session_state.design_mode = True
         st.session_state.code_mode = False
-        st.success("🎨 Mode Design")
+        st.success("🎨 **Mode actif** : Interfaces modernes et animations")
     
     st.markdown("---")
-    st.markdown("### 💬 Conversations")
+    st.markdown("### 💬 Mes conversations")
     
     if st.session_state.conversations:
         conversation_names = list(st.session_state.conversations.values())
-        selected_conv = st.selectbox("Active", conversation_names, index=conversation_names.index(st.session_state.current_conversation))
+        selected_conv = st.selectbox(
+            "Conversation active", 
+            conversation_names, 
+            index=conversation_names.index(st.session_state.current_conversation),
+            label_visibility="collapsed"
+        )
         
         if selected_conv != st.session_state.current_conversation:
             st.session_state.current_conversation = selected_conv
@@ -316,7 +311,7 @@ with st.sidebar:
     
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("➕ Nouvelle"):
+        if st.button("➕ Nouvelle", use_container_width=True, help="Créer une nouvelle conversation"):
             conv_count = len(st.session_state.conversations) + 1
             new_conv = create_conversation(st.session_state.user_id, f"Conversation {conv_count}")
             if new_conv:
@@ -324,7 +319,7 @@ with st.sidebar:
                 st.rerun()
     
     with col2:
-        if st.button("🗑️ Supprimer"):
+        if st.button("🗑️ Supprimer", use_container_width=True, help="Supprimer la conversation actuelle"):
             if len(st.session_state.conversations) > 1:
                 delete_conversation(st.session_state.current_conversation_id)
                 st.session_state.reload_conversations = True
@@ -332,7 +327,12 @@ with st.sidebar:
             else:
                 st.error("Gardez au moins 1 conversation")
     
-    new_name = st.text_input("Renommer", value=st.session_state.current_conversation, key="rename")
+    new_name = st.text_input(
+        "Renommer", 
+        value=st.session_state.current_conversation, 
+        key="rename",
+        help="Cliquez hors du champ pour sauvegarder"
+    )
     if new_name != st.session_state.current_conversation and new_name.strip():
         rename_conversation(st.session_state.current_conversation_id, new_name)
         st.session_state.reload_conversations = True
@@ -340,8 +340,8 @@ with st.sidebar:
     
     st.markdown("---")
     msg_count = len(get_conversation_messages(st.session_state.current_conversation_id))
-    st.markdown(f"💬 **Messages:** {msg_count}")
-    st.markdown(f"🗂️ **Conversations:** {len(st.session_state.conversations)}")
+    st.metric("Messages", msg_count)
+    st.metric("Conversations", len(st.session_state.conversations))
 
 # Fonctions utilitaires
 def render_html_if_present(response_text):
@@ -351,23 +351,32 @@ def render_html_if_present(response_text):
     if html_matches:
         for i, html_code in enumerate(html_matches):
             st.markdown(response_text.split('```html')[0])
-            if st.button(f"👁️ Voir", key=f"render_{i}_{hash(html_code)}", type="primary"):
+            if st.button(f"👁️ Aperçu visuel", key=f"render_{i}_{hash(html_code)}", type="primary"):
                 components.html(html_code, height=600, scrolling=True)
-            with st.expander(f"📝 Code"):
+            with st.expander(f"📝 Voir le code source"):
                 st.code(html_code, language='html')
         return True
     return False
 
-def call_groq_api(messages, api_key, model, code_mode=False, design_mode=False):
+def call_groq_api(messages, model, code_mode=False, design_mode=False):
     url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
+    }
     
     clean_messages = []
     
     if code_mode:
-        clean_messages.append({"role": "system", "content": "Expert en programmation. Code propre et commenté."})
+        clean_messages.append({
+            "role": "system", 
+            "content": "Tu es un expert en programmation de niveau senior. Fournis du code propre, bien commenté et optimisé selon les meilleures pratiques. Explique tes choix techniques."
+        })
     elif design_mode:
-        clean_messages.append({"role": "system", "content": "Expert UI/UX. Questions=texte. Créations=code HTML dans ```html"})
+        clean_messages.append({
+            "role": "system", 
+            "content": "Tu es un expert UI/UX et développeur front-end créatif. Pour les QUESTIONS: réponds en texte. Pour CRÉER un design: génère du code HTML/CSS/JS dans des balises ```html avec animations, icônes Font Awesome, et design moderne."
+        })
     
     for msg in messages:
         clean_messages.append({"role": msg["role"], "content": msg["content"]})
@@ -383,9 +392,18 @@ def call_groq_api(messages, api_key, model, code_mode=False, design_mode=False):
         response = requests.post(url, headers=headers, json=data, timeout=60)
         response.raise_for_status()
         result = response.json()
-        return result["choices"][0]["message"]["content"] if "choices" in result else "❌ Erreur"
+        return result["choices"][0]["message"]["content"] if "choices" in result else "❌ Erreur de réponse"
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 401:
+            return "❌ Erreur d'authentification API. Contactez l'administrateur."
+        elif e.response.status_code == 429:
+            return "❌ Limite d'utilisation atteinte. Réessayez dans quelques instants."
+        else:
+            return f"❌ Erreur serveur: {e.response.status_code}"
+    except requests.exceptions.Timeout:
+        return "❌ Délai d'attente dépassé. Vérifiez votre connexion internet."
     except Exception as e:
-        return f"❌ Erreur: {str(e)}"
+        return f"❌ Erreur inattendue: {str(e)}"
 
 # Afficher les messages
 messages = get_conversation_messages(st.session_state.current_conversation_id)
@@ -398,46 +416,54 @@ for msg in messages:
         else:
             st.markdown(msg["content"])
 
-# Input
-if prompt := st.chat_input("Posez votre question..."):
-    if not api_key:
-        st.error("⚠️ Ajoutez votre clé API Groq")
-        st.info("👉 Gratuit sur https://console.groq.com")
-    else:
-        save_message(st.session_state.current_conversation_id, "user", prompt)
-        
-        with st.chat_message("user"):
-            st.markdown(prompt)
-        
-        with st.chat_message("assistant"):
-            with st.spinner("🤔 Réflexion..."):
-                messages_for_api = [{"role": m["role"], "content": m["content"]} for m in messages]
-                messages_for_api.append({"role": "user", "content": prompt})
-                
-                response = call_groq_api(
-                    messages_for_api,
-                    api_key,
-                    model,
-                    st.session_state.get("code_mode", False),
-                    st.session_state.get("design_mode", False)
-                )
-                
-                if st.session_state.get("design_mode") and not render_html_if_present(response):
-                    st.markdown(response)
-                elif not st.session_state.get("design_mode"):
-                    st.markdown(response)
-        
-        save_message(st.session_state.current_conversation_id, "assistant", response)
-        st.rerun()
+# Input utilisateur
+if prompt := st.chat_input("💬 Écrivez votre message ici..."):
+    save_message(st.session_state.current_conversation_id, "user", prompt)
+    
+    with st.chat_message("user"):
+        st.markdown(prompt)
+    
+    with st.chat_message("assistant"):
+        with st.spinner("🤔 Frejus réfléchit..."):
+            messages_for_api = [{"role": m["role"], "content": m["content"]} for m in messages]
+            messages_for_api.append({"role": "user", "content": prompt})
+            
+            response = call_groq_api(
+                messages_for_api,
+                model,
+                st.session_state.get("code_mode", False),
+                st.session_state.get("design_mode", False)
+            )
+            
+            if st.session_state.get("design_mode") and not render_html_if_present(response):
+                st.markdown(response)
+            elif not st.session_state.get("design_mode"):
+                st.markdown(response)
+    
+    save_message(st.session_state.current_conversation_id, "assistant", response)
+    st.rerun()
 
-if not api_key and not messages:
+# Message de bienvenue
+if not messages:
     st.info("""
-    ### 🚀 Premiers pas
+    ### 👋 Bienvenue dans Frejus AI !
     
-    1. Obtenez votre clé API Groq gratuite sur https://console.groq.com
-    2. Entrez-la dans la barre latérale ⬅️
-    3. Choisissez votre mode (Conversation, Codage, Design)
-    4. Commencez à discuter ! 💬
+    **Quelques suggestions pour commencer :**
     
-    ✨ Toutes vos conversations sont sauvegardées de façon permanente dans Supabase !
+    🗣️ **Mode Conversation** :
+    - "Explique-moi la physique quantique simplement"
+    - "Donne-moi 5 idées de business en 2024"
+    - "Comment apprendre Python efficacement ?"
+    
+    💻 **Mode Codage** :
+    - "Crée une API REST en Python avec FastAPI"
+    - "Optimise ce code [coller votre code]"
+    - "Explique-moi les design patterns"
+    
+    🎨 **Mode Design** :
+    - "Crée une carte de profil utilisateur moderne"
+    - "Design un formulaire de contact élégant"
+    - "Fais-moi une page de tarification"
+    
+    ✨ **Astuce** : Soyez précis dans vos demandes pour de meilleurs résultats !
     """)
