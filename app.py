@@ -1,7 +1,7 @@
 import streamlit as st
 import requests
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from PIL import Image
 import io
 import base64
@@ -10,6 +10,7 @@ import streamlit.components.v1 as components
 import hashlib
 import os
 from supabase import create_client, Client
+import secrets as python_secrets
 
 # Configuration de la page
 st.set_page_config(
@@ -50,6 +51,51 @@ supabase: Client = init_supabase()
 # Fonctions d'authentification
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
+
+def generate_session_token():
+    return python_secrets.token_urlsafe(32)
+
+def create_session(user_id, username):
+    """Créer une session persistante qui expire après 30 jours"""
+    try:
+        token = generate_session_token()
+        expires_at = (datetime.now() + timedelta(days=30)).isoformat()
+        
+        # Créer la table sessions si elle n'existe pas
+        supabase.table('sessions').insert({
+            'user_id': user_id,
+            'token': token,
+            'expires_at': expires_at
+        }).execute()
+        
+        return token
+    except:
+        return None
+
+def get_session(token):
+    """Vérifier si une session est valide"""
+    try:
+        result = supabase.table('sessions').select('*, users(*)').eq('token', token).execute()
+        
+        if result.data and len(result.data) > 0:
+            session = result.data[0]
+            expires_at = datetime.fromisoformat(session['expires_at'].replace('Z', '+00:00'))
+            
+            # Vérifier si la session n'est pas expirée
+            if datetime.now(expires_at.tzinfo) < expires_at:
+                return session['users']
+        
+        return None
+    except:
+        return None
+
+def delete_session(token):
+    """Supprimer une session (déconnexion)"""
+    try:
+        supabase.table('sessions').delete().eq('token', token).execute()
+        return True
+    except:
+        return False
 
 def register_user(username, password, email):
     try:
@@ -147,6 +193,35 @@ if 'username' not in st.session_state:
     st.session_state.username = None
 if 'user_id' not in st.session_state:
     st.session_state.user_id = None
+if 'session_token' not in st.session_state:
+    st.session_state.session_token = None
+
+# Vérifier si l'utilisateur a une session active (cookie simulé avec query params)
+if not st.session_state.authenticated:
+    # Essayer de récupérer le token depuis les query params
+    query_params = st.query_params
+    
+    if 'session_token' in query_params:
+        token = query_params['session_token']
+        user = get_session(token)
+        
+        if user:
+            # Session valide, connexion automatique
+            st.session_state.authenticated = True
+            st.session_state.username = user['username']
+            st.session_state.user_id = user['id']
+            st.session_state.session_token = token
+    
+    # Si pas de session valide dans les query params, vérifier le session_state persistant
+    elif 'persistent_token' not in st.session_state:
+        st.session_state.persistent_token = None
+    elif st.session_state.persistent_token:
+        user = get_session(st.session_state.persistent_token)
+        if user:
+            st.session_state.authenticated = True
+            st.session_state.username = user['username']
+            st.session_state.user_id = user['id']
+            st.session_state.session_token = st.session_state.persistent_token
 
 # Page de connexion/inscription
 if not st.session_state.authenticated:
@@ -172,10 +247,20 @@ if not st.session_state.authenticated:
             if login_username and login_password:
                 success, message, user_id = login_user(login_username, login_password)
                 if success:
+                    # Créer une session persistante
+                    session_token = create_session(user_id, login_username)
+                    
                     st.session_state.authenticated = True
                     st.session_state.username = login_username
                     st.session_state.user_id = user_id
+                    st.session_state.session_token = session_token
+                    st.session_state.persistent_token = session_token
+                    
+                    # Ajouter le token aux query params pour persistance
+                    st.query_params['session_token'] = session_token
+                    
                     st.success(message)
+                    st.success("✅ Session active pendant 30 jours !")
                     st.rerun()
                 else:
                     st.error(message)
@@ -241,13 +326,24 @@ with col1:
     st.image("https://api.dicebear.com/7.x/bottts/svg?seed=frejus", width=80)
 with col2:
     st.title("🧠 Frejus AI")
-    st.markdown("*Assistant intelligent développé par Fréjus AZOMBADE*")
+    st.markdown("*Assistant intelligent propulsé par Groq*")
 with col3:
     st.markdown(f"👤 **{st.session_state.username}**")
     if st.button("🚪", key="logout", help="Déconnexion"):
+        # Supprimer la session de la base de données
+        if st.session_state.session_token:
+            delete_session(st.session_state.session_token)
+        
+        # Nettoyer les query params
+        st.query_params.clear()
+        
+        # Réinitialiser l'état
         st.session_state.authenticated = False
         st.session_state.username = None
         st.session_state.user_id = None
+        st.session_state.session_token = None
+        st.session_state.persistent_token = None
+        
         st.rerun()
 
 # Sidebar
@@ -467,4 +563,3 @@ if not messages:
     
     ✨ **Astuce** : Soyez précis dans vos demandes pour de meilleurs résultats !
     """)
-
