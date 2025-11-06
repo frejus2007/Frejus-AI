@@ -83,8 +83,9 @@ def get_cookie(key="cookie_getter"):
     </script>
     """
     # --- CORRECTION ---
-    # Suppression de 'default=""' qui causait le TypeError
-    cookie_value = components.html(js_code, height=0, key=key)
+    # L'utilisation de 'key' nécessite 'default' pour l'initialisation.
+    # 'default=None' est la valeur la plus sûre et gérée par votre logique.
+    cookie_value = components.html(js_code, height=0, key=key, default=None)
     return cookie_value
 
 def delete_cookie(name):
@@ -155,11 +156,11 @@ def get_session(token):
             # S'assurer que le format est géré
             if '+' not in expires_str.split('T')[1]:
                 if '.' in expires_str:
-                     expires_at = datetime.strptime(expires_str, "%Y-%m-%dT%H:%M:%S.%f").replace(tzinfo=timezone.utc)
+                        expires_at = datetime.strptime(expires_str, "%Y-%m-%dT%H:%M:%S.%f").replace(tzinfo=timezone.utc)
                 else:
-                     expires_at = datetime.strptime(expires_str, "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+                        expires_at = datetime.strptime(expires_str, "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
             else:
-                 expires_at = datetime.fromisoformat(expires_str)
+                    expires_at = datetime.fromisoformat(expires_str)
 
             # S'assurer que les deux dates sont "aware" (conscientes du fuseau horaire)
             if expires_at.tzinfo is None:
