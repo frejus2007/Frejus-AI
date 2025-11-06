@@ -82,10 +82,10 @@ def get_cookie(key="cookie_getter"):
         }}, "*");
     </script>
     """
-    # --- CORRECTION ---
-    # L'utilisation de 'key' nécessite 'default' pour l'initialisation.
-    # 'default=None' est la valeur la plus sûre et gérée par votre logique.
-    cookie_value = components.html(js_code, height=0, key=key, default=None)
+    # --- CORRECTION (Partie 1) ---
+    # Utiliser un string unique comme 'default' pour éviter le TypeError
+    # 'None' semble causer un conflit de type dans Streamlit/Python 3.13
+    cookie_value = components.html(js_code, height=0, key=key, default="COMPONENT_INIT")
     return cookie_value
 
 def delete_cookie(name):
@@ -320,14 +320,18 @@ if 'cookie_checked' not in st.session_state:
 # Logique de vérification des cookies (uniquement si non authentifié)
 if not st.session_state.authenticated:
     
-    # 1. Appeler le composant pour récupérer la valeur (retourne None au 1er run)
+    # 1. Appeler le composant pour récupérer la valeur
+    # (Retourne "COMPONENT_INIT" au 1er run)
     cookie_value = get_cookie()
     
     # 2. Si on n'a PAS ENCORE vérifié
     if not st.session_state.cookie_checked:
         
-        # 3. Si le cookie a une valeur (reçue du JS)
-        if cookie_value and isinstance(cookie_value, str) and cookie_value.strip():
+        # --- CORRECTION (Partie 2) ---
+        # Logique modifiée pour gérer "COMPONENT_INIT"
+        
+        # 3. Si le cookie a une valeur (reçue du JS) ET que ce n'est PAS la valeur d'init
+        if cookie_value and isinstance(cookie_value, str) and cookie_value != "COMPONENT_INIT":
             st.session_state.cookie_checked = True # Marquer comme vérifié
             user = get_session(cookie_value)
             if user:
@@ -336,13 +340,23 @@ if not st.session_state.authenticated:
                 st.session_state.user_id = user['id']
                 st.session_state.session_token = cookie_value
                 st.rerun()
-        elif cookie_value is None:
-            # 1er run, cookie_value est None. C'est normal.
-            # Ne pas marquer cookie_checked=True, pour laisser le JS s'exécuter.
+        
+        # 4. Si c'est la valeur d'initialisation (1er run)
+        elif cookie_value == "COMPONENT_INIT":
+            # Ne rien faire, 'cookie_checked' reste False.
+            # On attend que le JS s'exécute et force un rerun.
             pass
+            
+        # 5. Si le JS a tourné et a renvoyé "" (cookie vide)
         elif isinstance(cookie_value, str) and not cookie_value.strip():
             # Le JS a tourné et a renvoyé "", le cookie est vide.
             st.session_state.cookie_checked = True # Marquer comme vérifié
+            
+        # 6. Cas de 'None' (ne devrait plus arriver, mais sécurité)
+        elif cookie_value is None:
+            # Ne rien faire, attendre le JS
+            pass
+            
         else:
             # Valeur invalide ou autre type
             st.session_state.cookie_checked = True # Marquer comme vérifié
