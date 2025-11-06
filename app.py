@@ -1,18 +1,17 @@
 import streamlit as st
 import requests
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from PIL import Image
 import io
 import base64
 import re
 import streamlit.components.v1 as components
-import hashlib # Gardé pour le hashage de la clé de rendu
+import hashlib
 import os
 from supabase import create_client, Client
 import secrets as python_secrets
 import uuid
-import bcrypt # Nouvelle dépendance de sécurité
 
 # Configuration de la page
 st.set_page_config(
@@ -20,146 +19,6 @@ st.set_page_config(
     page_icon="🧠",
     layout="centered"
 )
-
-# --- CSS PERSONNALISÉ POUR LE NOUVEAU DESIGN ---
-def load_css():
-    css = """
-    <style>
-        /* --- Styles Globaux --- */
-        body {
-            background-color: #0e1117; /* Fond sombre */
-        }
-        
-        /* Conteneur principal */
-        .main .block-container {
-            padding-top: 2rem;
-            padding-bottom: 2rem;
-        }
-
-        /* --- Page de Connexion/Inscription --- */
-        
-        /* Conteneur pour centrer le formulaire */
-        .login-container {
-            background-color: #1a1c24; /* Fond de la carte */
-            padding: 2.5rem;
-            border-radius: 12px;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
-            margin-top: 2rem;
-        }
-        
-        /* En-tête du formulaire */
-        .login-header {
-            display: flex;
-            align-items: center;
-            gap: 15px;
-            margin-bottom: 1.5rem;
-        }
-        
-        /* Boutons des onglets (Connexion / Inscription) */
-        button[data-baseweb="tab"] {
-            background-color: transparent;
-            color: #a0a0a5;
-            border-radius: 8px;
-            font-weight: 500;
-        }
-        /* Onglet actif */
-        button[data-baseweb="tab"][aria-selected="true"] {
-            background-color: #2c2f3b;
-            color: white;
-        }
-        
-        /* Champs de saisie */
-        input[type="text"], input[type="password"], input[type="email"] {
-            background-color: #2c2f3b; /* Fond du champ */
-            color: white;
-            border: 1px solid #444;
-            border-radius: 8px;
-            padding: 10px 12px;
-        }
-        
-        /* Bouton principal */
-        .stButton button {
-            background-color: #0068c9; /* Bleu principal */
-            color: white;
-            border: none;
-            border-radius: 8px;
-            padding: 10px 0;
-            font-weight: 600;
-            transition: background-color 0.2s ease;
-        }
-        .stButton button:hover {
-            background-color: #0055a6; /* Bleu plus sombre au survol */
-        }
-        
-        /* Checkbox "Se souvenir de moi" */
-        .stCheckbox {
-            color: #a0a0a5;
-        }
-
-        /* --- Interface de Chat Principale --- */
-
-        /* En-tête du chat */
-        .header-container {
-            display: flex;
-            align-items: center;
-            gap: 15px;
-            margin-bottom: 1.5rem;
-            border-bottom: 1px solid #2c2f3b;
-            padding-bottom: 1rem;
-        }
-        
-        /* Sidebar */
-        .stSidebar {
-            background-color: #1a1c24; /* Fond de la sidebar */
-            border-right: 1px solid #2c2f3b;
-        }
-        .stSidebar [data-testid="stHeader"] {
-            color: white;
-            font-size: 1.5rem;
-        }
-        .stSidebar .stSelectbox, .stSidebar .stRadio {
-            background-color: #2c2f3b;
-            border-radius: 8px;
-            padding: 10px;
-        }
-
-        /* Messages du Chat */
-        [data-testid="stChatMessage"] {
-            background-color: #2c2f3b;
-            border-radius: 12px;
-            padding: 1rem 1.25rem;
-            margin-bottom: 0.5rem;
-        }
-        /* Avatar dans le chat */
-        [data-testid="stChatMessage"] .stAvatar {
-            background-color: #444;
-            padding: 5px;
-            border-radius: 50%;
-        }
-        
-        /* Message utilisateur */
-        [data-testid="stChatMessage"][data-testid="stChatMessage-user"] {
-            background-color: #0068c9; /* Fond bleu pour l'utilisateur */
-            color: white;
-        }
-
-        /* Zone de saisie du chat */
-        [data-testid="stChatInput"] {
-            background-color: #1a1c24; /* Fond de la barre de saisie */
-            border-top: 1px solid #2c2f3b;
-        }
-        [data-testid="stChatInput"] textarea {
-            background-color: #2c2f3b;
-            color: white;
-            border-radius: 8px;
-        }
-
-    </style>
-    """
-    st.markdown(css, unsafe_allow_html=True)
-
-# Appeler la fonction CSS
-load_css()
 
 # Configuration Supabase et Groq
 SUPABASE_URL = os.getenv("SUPABASE_URL") or st.secrets.get("SUPABASE_URL", "")
@@ -188,43 +47,36 @@ def set_local_storage(key, value):
     js_code = f"""
     <script>
         localStorage.setItem('{key}', '{value}');
-        console.log('Token saved to localStorage: {value}');
+        console.log('Token saved to localStorage');
     </script>
     """
     components.html(js_code, height=0)
 
-def get_local_storage_value(component_key):
-    """
-    Récupérer la valeur depuis localStorage via un composant Streamlit.
-    Nous utilisons 'component_key' pour cibler ce composant spécifique.
-    """
+def get_local_storage_value(key):
+    """Récupérer la valeur depuis localStorage"""
+    # Générer un ID unique pour cette requête
+    request_id = str(uuid.uuid4())
+    
     js_code = f"""
     <script>
-        const value = localStorage.getItem('frejus_session');
+        const value = localStorage.getItem('{key}');
         const data = {{
+            requestId: '{request_id}',
+            key: '{key}',
             value: value || ''
         }};
         
-        // Envoyer via Streamlit en ciblant le 'key' du composant
+        // Envoyer via Streamlit
         window.parent.postMessage({{
             type: 'streamlit:setComponentValue',
-            value: JSON.stringify(data),
-            key: '{component_key}'
+            value: JSON.stringify(data)
         }}, '*');
     </script>
     """
     
-    # --- CORRECTION DE LA TYPERROR ---
-    # 1. 'key=component_key' est ajouté pour que postMessage puisse le cibler.
-    # 2. 'default="COMPONENT_INIT"' (un string) est ajouté pour correspondre
-    #    au type de retour (JSON string) et éviter le TypeError.
-    result = components.html(js_code, height=0, key=component_key, default="COMPONENT_INIT")
+    result = components.html(js_code, height=0)
     
     try:
-        # Gérer la valeur d'init
-        if result == "COMPONENT_INIT":
-            return "COMPONENT_INIT"
-            
         if result:
             data = json.loads(result)
             return data.get('value', '')
@@ -243,21 +95,9 @@ def clear_local_storage(key):
     """
     components.html(js_code, height=0)
 
-# --- Fonctions d'authentification sécurisées (bcrypt restauré) ---
-
-def get_password_hash(password):
-    """Génère un hachage sécurisé bcrypt pour un mot de passe"""
-    salt = bcrypt.gensalt()
-    hashed_password = bcrypt.hashpw(password.encode('utf-8'), salt)
-    return hashed_password.decode('utf-8')
-
-def check_password_hash(password, stored_hash):
-    """Vérifie un mot de passe par rapport à un hachage bcrypt existant"""
-    try:
-        return bcrypt.checkpw(password.encode('utf-8'), stored_hash.encode('utf-8'))
-    except Exception as e:
-        # Gère les hachages invalides ou autres erreurs
-        return False
+# Fonctions d'authentification
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
 
 def generate_session_token():
     return python_secrets.token_urlsafe(32)
@@ -266,7 +106,7 @@ def create_session(user_id, username):
     """Créer une session persistante"""
     try:
         token = generate_session_token()
-        expires_at = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+        expires_at = (datetime.now() + timedelta(days=30)).isoformat()
         
         # Supprimer les anciennes sessions de cet utilisateur
         supabase.table('sessions').delete().eq('user_id', user_id).execute()
@@ -295,24 +135,19 @@ def get_session(token):
             session = result.data[0]
             expires_str = session['expires_at']
             
-            # Gérer différents formats de date (Supabase utilise 'Z' ou '+00:00')
+            # Gérer différents formats de date
             if expires_str.endswith('Z'):
                 expires_str = expires_str.replace('Z', '+00:00')
             
-            # S'assurer que le format est géré
-            if '+' not in expires_str.split('T')[1]:
-                if '.' in expires_str:
-                        expires_at = datetime.strptime(expires_str, "%Y-%m-%dT%H:%M:%S.%f").replace(tzinfo=timezone.utc)
-                else:
-                        expires_at = datetime.strptime(expires_str, "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
-            else:
-                    expires_at = datetime.fromisoformat(expires_str)
-
-            # S'assurer que les deux dates sont "aware" (conscientes du fuseau horaire)
+            expires_at = datetime.fromisoformat(expires_str)
+            
+            # Rendre aware si nécessaire
             if expires_at.tzinfo is None:
+                from datetime import timezone
                 expires_at = expires_at.replace(tzinfo=timezone.utc)
-                
-            now = datetime.now(timezone.utc)
+                now = datetime.now(timezone.utc)
+            else:
+                now = datetime.now(expires_at.tzinfo)
             
             # Vérifier si la session n'est pas expirée
             if now < expires_at:
@@ -333,34 +168,24 @@ def delete_session(token):
     try:
         supabase.table('sessions').delete().eq('token', token).execute()
         return True
-    except Exception as e:
-        st.error(f"Erreur suppression session: {str(e)}")
+    except:
         return False
 
 def register_user(username, password, email):
-    """Inscrire un nouvel utilisateur avec hachage bcrypt"""
     try:
-        # Vérifier si le nom d'utilisateur existe
-        result_user = supabase.table('users').select('id').eq('username', username).execute()
-        if result_user.data:
+        result = supabase.table('users').select('*').eq('username', username).execute()
+        if result.data:
             return False, "Nom d'utilisateur déjà pris"
         
-        # Vérifier si l'email existe
-        result_email = supabase.table('users').select('id').eq('email', email).execute()
-        if result_email.data:
-            return False, "Email déjà utilisé"
-        
-        # Hasher le mot de passe avec bcrypt
         user_data = {
             'username': username,
-            'password_hash': get_password_hash(password),
+            'password_hash': hash_password(password),
             'email': email
         }
         result = supabase.table('users').insert(user_data).execute()
         
         if result.data:
             user_id = result.data[0]['id']
-            # Créer une conversation initiale
             supabase.table('conversations').insert({
                 'user_id': user_id,
                 'name': 'Conversation 1'
@@ -372,7 +197,6 @@ def register_user(username, password, email):
         return False, f"Erreur: {str(e)}"
 
 def login_user(username, password):
-    """Connecter un utilisateur avec vérification bcrypt"""
     try:
         result = supabase.table('users').select('*').eq('username', username).execute()
         
@@ -380,31 +204,25 @@ def login_user(username, password):
             return False, "Utilisateur introuvable", None
         
         user = result.data[0]
-        
-        # Vérifier le mot de passe avec bcrypt
-        if not check_password_hash(password, user['password_hash']):
+        if user['password_hash'] != hash_password(password):
             return False, "Mot de passe incorrect", None
         
         return True, "Connexion réussie !", user['id']
     except Exception as e:
         return False, f"Erreur: {str(e)}", None
 
-# --- Fonctions de gestion des données (Robustesse améliorée) ---
-
 def get_user_conversations(user_id):
     try:
         result = supabase.table('conversations').select('*').eq('user_id', user_id).order('created_at').execute()
         return result.data
-    except Exception as e:
-        st.error(f"Erreur (get_user_conversations): {str(e)}")
+    except:
         return []
 
 def get_conversation_messages(conversation_id):
     try:
         result = supabase.table('messages').select('*').eq('conversation_id', conversation_id).order('created_at').execute()
         return result.data
-    except Exception as e:
-        st.error(f"Erreur (get_conversation_messages): {str(e)}")
+    except:
         return []
 
 def save_message(conversation_id, role, content):
@@ -415,8 +233,7 @@ def save_message(conversation_id, role, content):
             'content': content
         }).execute()
         return True
-    except Exception as e:
-        st.error(f"Erreur (save_message): {str(e)}")
+    except:
         return False
 
 def create_conversation(user_id, name):
@@ -426,27 +243,21 @@ def create_conversation(user_id, name):
             'name': name
         }).execute()
         return result.data[0] if result.data else None
-    except Exception as e:
-        st.error(f"Erreur (create_conversation): {str(e)}")
+    except:
         return None
 
 def delete_conversation(conversation_id):
     try:
-        # Supprimer d'abord les messages
-        supabase.table('messages').delete().eq('conversation_id', conversation_id).execute()
-        # Supprimer la conversation
         supabase.table('conversations').delete().eq('id', conversation_id).execute()
         return True
-    except Exception as e:
-        st.error(f"Erreur (delete_conversation): {str(e)}")
+    except:
         return False
 
 def rename_conversation(conversation_id, new_name):
     try:
         supabase.table('conversations').update({'name': new_name}).eq('id', conversation_id).execute()
         return True
-    except Exception as e:
-        st.error(f"Erreur (rename_conversation): {str(e)}")
+    except:
         return False
 
 # Initialiser l'état de session
@@ -458,49 +269,35 @@ if 'user_id' not in st.session_state:
     st.session_state.user_id = None
 if 'session_token' not in st.session_state:
     st.session_state.session_token = None
-if 'storage_checked' not in st.session_state:
-    st.session_state.storage_checked = False
 
-# Vérifier localStorage au premier chargement uniquement
-if not st.session_state.storage_checked and not st.session_state.authenticated:
+# Vérifier le token dans l'URL au chargement
+if not st.session_state.authenticated:
+    # Récupérer le token depuis l'URL
+    query_params = st.query_params
     
-    # Appel de la fonction corrigée
-    stored_token = get_local_storage_value(component_key="storage_getter")
-    
-    # Si ce n'est PAS la valeur d'init (c-à-d que le JS a répondu)
-    if stored_token != "COMPONENT_INIT":
-        st.session_state.storage_checked = True
+    if 'token' in query_params:
+        token = query_params['token']
+        user = get_session(token)
         
-        if stored_token:
-            user = get_session(stored_token)
-            if user:
-                st.session_state.authenticated = True
-                st.session_state.username = user['username']
-                st.session_state.user_id = user['id']
-                st.session_state.session_token = stored_token
-                st.rerun()
-    # Si c'est le premier chargement (valeur d'init), ne rien faire
-    # 'storage_checked' reste False, on attend le rerun du JS.
-    
+        if user:
+            st.session_state.authenticated = True
+            st.session_state.username = user['username']
+            st.session_state.user_id = user['id']
+            st.session_state.session_token = token
+            st.rerun()
 
 # Page de connexion/inscription
 if not st.session_state.authenticated:
+    col1, col2 = st.columns([1, 5])
+    with col1:
+        st.image("https://api.dicebear.com/7.x/bottts/svg?seed=frejus", width=80)
+    with col2:
+        st.title("🧠 Frejus AI")
+        st.markdown("*Votre assistant intelligent pour résoudre tous vos problèmes*")
     
-    # --- Utilisation du conteneur CSS pour le design ---
-    st.markdown('<div class="login-container">', unsafe_allow_html=True)
+    st.markdown("---")
     
-    # --- En-tête personnalisé ---
-    st.markdown("""
-    <div class="login-header">
-        <img src="https://api.dicebear.com/7.x/bottts/svg?seed=frejus" width="60">
-        <div>
-            <h1 style="margin: 0; padding: 0;">🧠 Frejus AI</h1>
-            <p style="margin: 0; padding: 0; color: #a0a0a5;">Votre assistant intelligent</p>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    st.success("✅ **Connexion persistante** : Restez connecté !")
+    st.success("✅ **Connexion persistante** : Restez connecté même après fermeture du navigateur !")
     
     tab1, tab2 = st.tabs(["🔐 Connexion", "📝 Inscription"])
     
@@ -533,7 +330,7 @@ if not st.session_state.authenticated:
                     else:
                         st.error("❌ Erreur lors de la création de la session")
                 else:
-                    st.error(f"❌ {message}")
+                    st.error(message)
             else:
                 st.warning("Veuillez remplir tous les champs")
     
@@ -552,7 +349,7 @@ if not st.session_state.authenticated:
                     st.error("Les mots de passe ne correspondent pas")
                 elif len(reg_password) < 6:
                     st.error("Le mot de passe doit contenir au moins 6 caractères")
-                elif '@' not in reg_email or '.' not in reg_email:
+                elif '@' not in reg_email:
                     st.error("Email invalide")
                 else:
                     success, message = register_user(reg_username, reg_password, reg_email)
@@ -561,82 +358,65 @@ if not st.session_state.authenticated:
                         st.balloons()
                         st.info("✅ Connectez-vous maintenant !")
                     else:
-                        st.error(f"❌ {message}")
+                        st.error(message)
             else:
                 st.warning("Veuillez remplir tous les champs")
     
-    st.markdown("</div>", unsafe_allow_html=True) # Ferme login-container
+    st.markdown("---")
+    st.markdown("""
+    ### 🎯 Pourquoi Frejus AI ?
+    
+    - 💬 **Conversations illimitées**
+    - 💻 **Mode Codage Expert**
+    - 🎨 **Mode Design Créatif**
+    - 💾 **Sauvegarde automatique**
+    - 🔐 **100% Sécurisé**
+    - 🆓 **Totalement gratuit**
+    - 🔄 **Connexion persistante**
+    """)
+    
     st.stop()
 
-# --- Interface principale de l'application ---
-# Ce code n'est atteint que si st.session_state.authenticated EST True
+# Interface principale (suite du code identique...)
+# [Le reste du code reste le même que la version précédente]
 
-# Recharger les conversations si nécessaire (ex: après création/suppression)
 if 'conversations' not in st.session_state or st.session_state.get('reload_conversations', True):
     conversations_data = get_user_conversations(st.session_state.user_id)
+    st.session_state.conversations = {conv['id']: conv['name'] for conv in conversations_data}
+    st.session_state.conversations_ids = {conv['name']: conv['id'] for conv in conversations_data}
     if conversations_data:
-        st.session_state.conversations = {conv['id']: conv['name'] for conv in conversations_data}
-        st.session_state.conversations_ids = {conv['name']: conv['id'] for conv in conversations_data}
-        
-        # S'assurer que current_conversation est valide, sinon réinitialiser
-        if st.session_state.get('current_conversation') not in st.session_state.conversations_ids:
-            st.session_state.current_conversation = conversations_data[0]['name']
-            st.session_state.current_conversation_id = conversations_data[0]['id']
-    else:
-        # Gérer le cas où toutes les conversations sont supprimées
-        # ou un nouvel utilisateur sans conversation (corrigé à l'inscription)
-        st.session_state.conversations = {}
-        st.session_state.conversations_ids = {}
-        
+        st.session_state.current_conversation = conversations_data[0]['name']
+        st.session_state.current_conversation_id = conversations_data[0]['id']
     st.session_state.reload_conversations = False
 
-# Assurer qu'il y a toujours au moins une conversation
-if not st.session_state.conversations and st.session_state.user_id:
-    # Si l'utilisateur n'a AUCUNE conversation (par ex. ancien utilisateur avant la MAJ)
-    default_conv = create_conversation(st.session_state.user_id, "Conversation 1")
-    if default_conv:
-        st.session_state.reload_conversations = True
-        st.rerun()
-    else:
-        st.error("Erreur critique : impossible de créer une conversation de base.")
-        st.stop()
-
-# --- En-tête de l'application (Design amélioré) ---
-st.markdown("""
-<div class="header-container">
-    <img src="https://api.dicebear.com/7.x/bottts/svg?seed=frejus" width="60">
-    <div>
-        <h1 style="margin: 0; padding: 0;">🧠 Frejus AI</h1>
-        <p style="margin: 0; padding: 0; color: #a0a0a5;">Propulsé par Groq</p>
-    </div>
-</div>
-""", unsafe_allow_html=True)
-
-# Colonne pour le bouton de déconnexion (placé à droite)
-col1, col2 = st.columns([4, 1])
+# En-tête
+col1, col2, col3 = st.columns([1, 4, 1])
 with col1:
-    st.markdown(f"Bienvenue, **{st.session_state.username}** !")
+    st.image("https://api.dicebear.com/7.x/bottts/svg?seed=frejus", width=80)
 with col2:
-    if st.button("🚪 Déconnexion", key="logout", help="Déconnexion", use_container_width=True):
+    st.title("🧠 Frejus AI")
+    st.markdown("*Assistant intelligent propulsé par Groq*")
+with col3:
+    st.markdown(f"👤 **{st.session_state.username}**")
+    if st.button("🚪", key="logout", help="Déconnexion"):
         # Supprimer la session et le localStorage
         if st.session_state.session_token:
             delete_session(st.session_state.session_token)
             clear_local_storage("frejus_session")
         
-        # Réinitialiser tous les états de session
-        for key in list(st.session_state.keys()):
-            del st.session_state[key]
-        
         st.session_state.authenticated = False
+        st.session_state.username = None
+        st.session_state.user_id = None
+        st.session_state.session_token = None
         st.session_state.storage_checked = False
         
         st.success("✅ Déconnexion réussie")
         st.rerun()
 
-
-# Sidebar
+# Sidebar (identique...)
 with st.sidebar:
     st.header("⚙️ Configuration")
+    st.success("✅ **Connecté** : Session active")
     
     st.markdown("---")
     st.markdown("### 📚 Mode de conversation")
@@ -648,16 +428,16 @@ with st.sidebar:
     )
     
     if model_category == "💬 Conversation générale":
-        model = st.selectbox("Modèle IA", ["llama-3.1-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768", "gemma2-9b-it"])
+        model = st.selectbox("Modèle IA", ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768", "gemma2-9b-it"])
         st.session_state.code_mode = False
         st.session_state.design_mode = False
     elif model_category == "💻 Codage expert":
-        model = st.selectbox("Modèle IA", ["llama-3.1-70b-versatile", "mixtral-8x7b-32768"])
+        model = st.selectbox("Modèle IA", ["llama-3.3-70b-versatile", "mixtral-8x7b-32768"])
         st.session_state.code_mode = True
         st.session_state.design_mode = False
         st.info("🔧 Mode codage actif")
     else:
-        model = st.selectbox("Modèle IA", ["llama-3.1-70b-versatile", "mixtral-8x7b-32768"])
+        model = st.selectbox("Modèle IA", ["llama-3.3-70b-versatile", "mixtral-8x7b-32768"])
         st.session_state.design_mode = True
         st.session_state.code_mode = False
         st.success("🎨 Mode design actif")
@@ -667,18 +447,7 @@ with st.sidebar:
     
     if st.session_state.conversations:
         conversation_names = list(st.session_state.conversations.values())
-        
-        # Gérer le cas où la conversation actuelle n'existe plus
-        current_index = 0
-        if 'current_conversation' in st.session_state and st.session_state.current_conversation in conversation_names:
-            current_index = conversation_names.index(st.session_state.current_conversation)
-        else:
-            # Si la conversation n'existe pas, prendre la première
-            st.session_state.current_conversation = conversation_names[0]
-            st.session_state.current_conversation_id = st.session_state.conversations_ids[conversation_names[0]]
-
-        
-        selected_conv = st.selectbox("Conversation active", conversation_names, index=current_index, label_visibility="collapsed")
+        selected_conv = st.selectbox("Conversation active", conversation_names, index=conversation_names.index(st.session_state.current_conversation), label_visibility="collapsed")
         
         if selected_conv != st.session_state.current_conversation:
             st.session_state.current_conversation = selected_conv
@@ -705,12 +474,9 @@ with st.sidebar:
     
     new_name = st.text_input("Renommer", value=st.session_state.current_conversation, key="rename")
     if new_name != st.session_state.current_conversation and new_name.strip():
-        if new_name not in st.session_state.conversations_ids:
-            rename_conversation(st.session_state.current_conversation_id, new_name)
-            st.session_state.reload_conversations = True
-            st.rerun()
-        else:
-            st.warning("Ce nom existe déjà.")
+        rename_conversation(st.session_state.current_conversation_id, new_name)
+        st.session_state.reload_conversations = True
+        st.rerun()
     
     st.markdown("---")
     msg_count = len(get_conversation_messages(st.session_state.current_conversation_id))
@@ -719,28 +485,18 @@ with st.sidebar:
 
 # Fonctions utilitaires
 def render_html_if_present(response_text):
-    """Affiche le texte et les aperçus HTML de manière entrelacée"""
     html_pattern = r'```html\n(.*?)\n```'
-    parts = re.split(html_pattern, response_text, flags=re.DOTALL)
+    html_matches = re.findall(html_pattern, response_text, re.DOTALL)
     
-    if len(parts) == 1: # Pas de HTML trouvé
-        return False
-    
-    for i, part in enumerate(parts):
-        if i % 2 == 0:
-            # C'est du texte normal
-            if part.strip():
-                st.markdown(part)
-        else:
-            # C'est le code HTML
-            html_code = part
-            # Utiliser un hash du code pour une clé unique
-            key_hash = hashlib.md5(html_code.encode()).hexdigest()
-            if st.button(f"👁️ Aperçu", key=f"render_{i}_{key_hash}", type="primary"):
+    if html_matches:
+        for i, html_code in enumerate(html_matches):
+            st.markdown(response_text.split('```html')[0])
+            if st.button(f"👁️ Aperçu", key=f"render_{i}_{hash(html_code)}", type="primary"):
                 components.html(html_code, height=600, scrolling=True)
             with st.expander(f"📝 Code"):
                 st.code(html_code, language='html')
-    return True
+        return True
+    return False
 
 def call_groq_api(messages, model, code_mode=False, design_mode=False):
     url = "https://api.groq.com/openai/v1/chat/completions"
@@ -749,12 +505,9 @@ def call_groq_api(messages, model, code_mode=False, design_mode=False):
     clean_messages = []
     
     if code_mode:
-        clean_messages.append({"role": "system", "content": "Tu es un expert en programmation. Tu fournis des réponses claires, du code propre, commenté et complet. Tu es spécialisé dans tous les langages de programmation."})
+        clean_messages.append({"role": "system", "content": "Expert en programmation. Code propre et commenté."})
     elif design_mode:
-        clean_messages.append({"role": "system", "content": "Tu es un expert en design UI/UX et en développement frontend. Si on te demande de créer quelque chose, tu réponds *exclusivement* avec du code HTML, CSS et JS dans un bloc ```html. Si on te pose une question, tu réponds normalement en texte."})
-    else:
-        clean_messages.append({"role": "system", "content": "Tu es un assistant IA polyvalent nommé Frejus AI. Tu es serviable, créatif et honnête."})
-
+        clean_messages.append({"role": "system", "content": "Expert UI/UX. Questions=texte. Créations=code HTML dans ```html"})
     
     for msg in messages:
         clean_messages.append({"role": msg["role"], "content": msg["content"]})
@@ -770,13 +523,9 @@ def call_groq_api(messages, model, code_mode=False, design_mode=False):
         response = requests.post(url, headers=headers, json=data, timeout=60)
         response.raise_for_status()
         result = response.json()
-        return result["choices"][0]["message"]["content"] if "choices" in result else "❌ Erreur de réponse de l'API"
-    except requests.exceptions.Timeout:
-        return "❌ Erreur : Le délai de réponse de l'API (60s) a été dépassé."
-    except requests.exceptions.RequestException as e:
-        return f"❌ Erreur de connexion à l'API: {str(e)}"
+        return result["choices"][0]["message"]["content"] if "choices" in result else "❌ Erreur"
     except Exception as e:
-        return f"❌ Erreur inconnue: {str(e)}"
+        return f"❌ Erreur: {str(e)}"
 
 # Afficher les messages
 messages = get_conversation_messages(st.session_state.current_conversation_id)
@@ -808,10 +557,9 @@ if prompt := st.chat_input("💬 Écrivez votre message..."):
                 st.session_state.get("design_mode", False)
             )
             
-            if st.session_state.get("design_mode"):
-                if not render_html_if_present(response):
-                    st.markdown(response)
-            else:
+            if st.session_state.get("design_mode") and not render_html_if_present(response):
+                st.markdown(response)
+            elif not st.session_state.get("design_mode"):
                 st.markdown(response)
     
     save_message(st.session_state.current_conversation_id, "assistant", response)
