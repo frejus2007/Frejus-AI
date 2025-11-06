@@ -1,18 +1,16 @@
 import streamlit as st
 import requests
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from PIL import Image
 import io
 import base64
 import re
 import streamlit.components.v1 as components
-import hashlib # Gardé pour le hashage de la clé de rendu
+import hashlib
 import os
 from supabase import create_client, Client
 import secrets as python_secrets
-import uuid
-import bcrypt # Nouvelle dépendance de sécurité
 
 # Configuration de la page
 st.set_page_config(
@@ -29,10 +27,18 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY") or st.secrets.get("GROQ_API_KEY", "")
 # Vérifier la configuration
 if not SUPABASE_URL or not SUPABASE_KEY:
     st.error("⚠️ Configuration Supabase manquante.")
+    st.info("""
+    ### Ajoutez dans les secrets Streamlit :
+    ```toml
+    SUPABASE_URL = "votre_url"
+    SUPABASE_KEY = "votre_clé"
+    GROQ_API_KEY = "votre_clé_groq"
+    ```
+    """)
     st.stop()
 
 if not GROQ_API_KEY:
-    st.error("⚠️ Clé API Groq manquante.")
+    st.error("⚠️ Clé API Groq manquante dans les secrets Streamlit.")
     st.stop()
 
 # Initialiser Supabase
@@ -42,89 +48,20 @@ def init_supabase():
 
 supabase: Client = init_supabase()
 
-# Fonctions pour gérer les cookies via JavaScript
-def set_cookie(name, value, days=30):
-    """Définir un cookie avec JavaScript"""
-    js_code = f"""
-    <script>
-        function setCookie(name, value, days) {{
-            const date = new Date();
-            date.setTime(date.getTime() + (days * 24 * 60 * 60 * 1000));
-            const expires = "expires=" + date.toUTCString();
-            document.cookie = name + "=" + value + ";" + expires + ";path=/;SameSite=Strict";
-        }}
-        setCookie("{name}", "{value}", {days});
-    </script>
-    """
-    components.html(js_code, height=0)
-
-def get_cookie(key="cookie_getter"):
-    """
-    Récupérer un cookie via JavaScript de manière fiable en utilisant un composant
-    Streamlit avec une clé et une valeur par défaut.
-    """
-    js_code = f"""
-    <script>
-        function getCookie(name) {{
-            const value = `; ${{document.cookie}}`;
-            const parts = value.split(`; ${{name}}=`);
-            if (parts.length === 2) return parts.pop().split(';').shift();
-            return null;
-        }}
-        
-        const token = getCookie("frejus_session");
-        
-        // Envoyer le token à Streamlit en ciblant la CLÉ (key)
-        window.parent.postMessage({{
-            type: "streamlit:setComponentValue", 
-            value: token || "", // Envoyer "" si null
-            key: "{key}"
-        }}, "*");
-    </script>
-    """
-    # Ce composant renvoie la valeur définie par postMessage
-    # default="" garantit qu'il renvoie une chaîne vide au lieu de None au premier chargement
-    cookie_value = components.html(js_code, height=0, key=key, default="")
-    return cookie_value
-
-def delete_cookie(name):
-    """Supprimer un cookie"""
-    js_code = f"""
-    <script>
-        document.cookie = "{name}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
-    </script>
-    """
-    components.html(js_code, height=0)
-
-# --- Fonctions d'authentification sécurisées ---
-
-def get_password_hash(password):
-    """Génère un hachage sécurisé bcrypt pour un mot de passe"""
-    salt = bcrypt.gensalt()
-    hashed_password = bcrypt.hashpw(password.encode('utf-8'), salt)
-    return hashed_password.decode('utf-8')
-
-def check_password_hash(password, stored_hash):
-    """Vérifie un mot de passe par rapport à un hachage bcrypt existant"""
-    try:
-        return bcrypt.checkpw(password.encode('utf-8'), stored_hash.encode('utf-8'))
-    except Exception as e:
-        # Gère les hachages invalides ou autres erreurs
-        return False
+# Fonctions d'authentification
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
 
 def generate_session_token():
     return python_secrets.token_urlsafe(32)
 
 def create_session(user_id, username):
-    """Créer une session persistante"""
+    """Créer une session persistante qui expire après 30 jours"""
     try:
         token = generate_session_token()
-        expires_at = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+        expires_at = (datetime.now() + timedelta(days=30)).isoformat()
         
-        # Supprimer les anciennes sessions de cet utilisateur
-        supabase.table('sessions').delete().eq('user_id', user_id).execute()
-        
-        # Créer la nouvelle session
+        # Créer la table sessions si elle n'existe pas
         supabase.table('sessions').insert({
             'user_id': user_id,
             'token': token,
@@ -132,88 +69,49 @@ def create_session(user_id, username):
         }).execute()
         
         return token
-    except Exception as e:
-        st.error(f"Erreur création session: {str(e)}")
+    except:
         return None
 
 def get_session(token):
     """Vérifier si une session est valide"""
-    if not token:
-        return None
-    
     try:
-        result = supabase.table('sessions').select('user_id, expires_at, users(id, username, email)').eq('token', token).execute()
+        result = supabase.table('sessions').select('*, users(*)').eq('token', token).execute()
         
         if result.data and len(result.data) > 0:
             session = result.data[0]
-            expires_str = session['expires_at']
-            
-            # Gérer différents formats de date (Supabase utilise 'Z' ou '+00:00')
-            if expires_str.endswith('Z'):
-                expires_str = expires_str.replace('Z', '+00:00')
-            
-            # S'assurer que le format est géré
-            if '+' not in expires_str.split('T')[1]:
-                if '.' in expires_str:
-                     expires_at = datetime.strptime(expires_str, "%Y-%m-%dT%H:%M:%S.%f").replace(tzinfo=timezone.utc)
-                else:
-                     expires_at = datetime.strptime(expires_str, "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
-            else:
-                 expires_at = datetime.fromisoformat(expires_str)
-
-            # S'assurer que les deux dates sont "aware" (conscientes du fuseau horaire)
-            if expires_at.tzinfo is None:
-                expires_at = expires_at.replace(tzinfo=timezone.utc)
-                
-            now = datetime.now(timezone.utc)
+            expires_at = datetime.fromisoformat(session['expires_at'].replace('Z', '+00:00'))
             
             # Vérifier si la session n'est pas expirée
-            if now < expires_at:
-                user = session['users']
-                return {
-                    'id': user['id'],
-                    'username': user['username'],
-                    'email': user['email']
-                }
+            if datetime.now(expires_at.tzinfo) < expires_at:
+                return session['users']
         
         return None
-    except Exception as e:
-        st.error(f"Erreur vérification session: {str(e)}")
+    except:
         return None
 
 def delete_session(token):
-    """Supprimer une session"""
+    """Supprimer une session (déconnexion)"""
     try:
         supabase.table('sessions').delete().eq('token', token).execute()
         return True
-    except Exception as e:
-        st.error(f"Erreur suppression session: {str(e)}")
+    except:
         return False
 
 def register_user(username, password, email):
-    """Inscrire un nouvel utilisateur avec hachage bcrypt"""
     try:
-        # Vérifier si le nom d'utilisateur existe
-        result_user = supabase.table('users').select('id').eq('username', username).execute()
-        if result_user.data:
+        result = supabase.table('users').select('*').eq('username', username).execute()
+        if result.data:
             return False, "Nom d'utilisateur déjà pris"
         
-        # Vérifier si l'email existe
-        result_email = supabase.table('users').select('id').eq('email', email).execute()
-        if result_email.data:
-            return False, "Email déjà utilisé"
-        
-        # Hasher le mot de passe avec bcrypt
         user_data = {
             'username': username,
-            'password_hash': get_password_hash(password),
+            'password_hash': hash_password(password),
             'email': email
         }
         result = supabase.table('users').insert(user_data).execute()
         
         if result.data:
             user_id = result.data[0]['id']
-            # Créer une conversation initiale
             supabase.table('conversations').insert({
                 'user_id': user_id,
                 'name': 'Conversation 1'
@@ -225,7 +123,6 @@ def register_user(username, password, email):
         return False, f"Erreur: {str(e)}"
 
 def login_user(username, password):
-    """Connecter un utilisateur avec vérification bcrypt"""
     try:
         result = supabase.table('users').select('*').eq('username', username).execute()
         
@@ -233,31 +130,25 @@ def login_user(username, password):
             return False, "Utilisateur introuvable", None
         
         user = result.data[0]
-        
-        # Vérifier le mot de passe avec bcrypt
-        if not check_password_hash(password, user['password_hash']):
+        if user['password_hash'] != hash_password(password):
             return False, "Mot de passe incorrect", None
         
         return True, "Connexion réussie !", user['id']
     except Exception as e:
         return False, f"Erreur: {str(e)}", None
 
-# --- Fonctions de gestion des données (Robustesse améliorée) ---
-
 def get_user_conversations(user_id):
     try:
         result = supabase.table('conversations').select('*').eq('user_id', user_id).order('created_at').execute()
         return result.data
-    except Exception as e:
-        st.error(f"Erreur (get_user_conversations): {str(e)}")
+    except:
         return []
 
 def get_conversation_messages(conversation_id):
     try:
         result = supabase.table('messages').select('*').eq('conversation_id', conversation_id).order('created_at').execute()
         return result.data
-    except Exception as e:
-        st.error(f"Erreur (get_conversation_messages): {str(e)}")
+    except:
         return []
 
 def save_message(conversation_id, role, content):
@@ -268,8 +159,7 @@ def save_message(conversation_id, role, content):
             'content': content
         }).execute()
         return True
-    except Exception as e:
-        st.error(f"Erreur (save_message): {str(e)}")
+    except:
         return False
 
 def create_conversation(user_id, name):
@@ -279,28 +169,21 @@ def create_conversation(user_id, name):
             'name': name
         }).execute()
         return result.data[0] if result.data else None
-    except Exception as e:
-        st.error(f"Erreur (create_conversation): {str(e)}")
+    except:
         return None
 
 def delete_conversation(conversation_id):
     try:
-        # Supprimer d'abord les messages (si la contrainte de clé étrangère est ON DELETE RESTRICT)
-        # Si c'est ON DELETE CASCADE, cette ligne n'est pas nécessaire.
-        supabase.table('messages').delete().eq('conversation_id', conversation_id).execute()
-        # Supprimer la conversation
         supabase.table('conversations').delete().eq('id', conversation_id).execute()
         return True
-    except Exception as e:
-        st.error(f"Erreur (delete_conversation): {str(e)}")
+    except:
         return False
 
 def rename_conversation(conversation_id, new_name):
     try:
         supabase.table('conversations').update({'name': new_name}).eq('id', conversation_id).execute()
         return True
-    except Exception as e:
-        st.error(f"Erreur (rename_conversation): {str(e)}")
+    except:
         return False
 
 # Initialiser l'état de session
@@ -312,42 +195,16 @@ if 'user_id' not in st.session_state:
     st.session_state.user_id = None
 if 'session_token' not in st.session_state:
     st.session_state.session_token = None
-if 'cookie_checked' not in st.session_state:
-    st.session_state.cookie_checked = False
 
-
-# --- CORRECTION STRUCTURELLE ---
-# Toute la logique de vérification des cookies ne s'exécute que si
-# l'utilisateur n'est PAS déjà authentifié.
-if not st.session_state.authenticated:
-    
-    # 1. Appeler le composant pour récupérer la valeur
-    cookie_value = get_cookie()
-    
-    # 2. Si on n'a PAS ENCORE vérifié (ou si la valeur était vide au tour d'avant)
-    if not st.session_state.cookie_checked:
-        
-        # 3. Si le cookie a une valeur (reçue du JS), on tente la connexion
-        if cookie_value and isinstance(cookie_value, str) and cookie_value.strip():
-            # On a une VRAIE valeur, on la vérifie
-            st.session_state.cookie_checked = True # Marquer comme vérifié
-            user = get_session(cookie_value)
-            if user:
-                st.session_state.authenticated = True
-                st.session_state.username = user['username']
-                st.session_state.user_id = user['id']
-                st.session_state.session_token = cookie_value
-                st.rerun()
-        elif cookie_value is None or (isinstance(cookie_value, str) and not cookie_value.strip()):
-            # La valeur est vide (soit par défaut, soit le cookie est vide)
-            # Ne pas marquer cookie_checked=True, pour qu'on puisse réessayer au prochain re-run (celui du JS)
-            pass
-        else:
-            # Valeur invalide ou autre type, marquer comme vérifié pour éviter les boucles
-            st.session_state.cookie_checked = True
+# Vérifier si l'utilisateur a une session active
+if not st.session_state.authenticated and st.session_state.session_token:
+    user = get_session(st.session_state.session_token)
+    if user:
+        st.session_state.authenticated = True
+        st.session_state.username = user['username']
+        st.session_state.user_id = user['id']
 
 # Page de connexion/inscription
-# S'affiche si l'authentification (normale ou par cookie) a échoué
 if not st.session_state.authenticated:
     col1, col2 = st.columns([1, 5])
     with col1:
@@ -358,7 +215,7 @@ if not st.session_state.authenticated:
     
     st.markdown("---")
     
-    st.success("✅ **Connexion persistante** : Restez connecté même après fermeture du navigateur !")
+    st.success("✅ **Gratuit et sans limite** : Aucune clé API requise, utilisez Frejus AI librement !")
     
     tab1, tab2 = st.tabs(["🔐 Connexion", "📝 Inscription"])
     
@@ -366,7 +223,6 @@ if not st.session_state.authenticated:
         st.subheader("Connexion")
         login_username = st.text_input("Nom d'utilisateur", key="login_user")
         login_password = st.text_input("Mot de passe", type="password", key="login_pass")
-        remember_me = st.checkbox("Se souvenir de moi (30 jours)", value=True)
         
         if st.button("Se connecter", type="primary", use_container_width=True):
             if login_username and login_password:
@@ -375,23 +231,20 @@ if not st.session_state.authenticated:
                     # Créer une session persistante
                     session_token = create_session(user_id, login_username)
                     
-                    if session_token:
-                        st.session_state.authenticated = True
-                        st.session_state.username = login_username
-                        st.session_state.user_id = user_id
-                        st.session_state.session_token = session_token
-                        
-                        # Définir le cookie si "Se souvenir de moi" est coché
-                        if remember_me:
-                            set_cookie("frejus_session", session_token, 30)
-                        
-                        st.success(message)
-                        st.balloons()
-                        st.rerun()
-                    else:
-                        st.error("❌ Erreur lors de la création de la session")
+                    st.session_state.authenticated = True
+                    st.session_state.username = login_username
+                    st.session_state.user_id = user_id
+                    st.session_state.session_token = session_token
+                    st.session_state.persistent_token = session_token
+                    
+                    # Ajouter le token aux query params pour persistance
+                    st.query_params['session_token'] = session_token
+                    
+                    st.success(message)
+                    st.success("✅ Session active pendant 30 jours !")
+                    st.rerun()
                 else:
-                    st.error(f"❌ {message}")
+                    st.error(message)
             else:
                 st.warning("Veuillez remplir tous les champs")
     
@@ -410,66 +263,43 @@ if not st.session_state.authenticated:
                     st.error("Les mots de passe ne correspondent pas")
                 elif len(reg_password) < 6:
                     st.error("Le mot de passe doit contenir au moins 6 caractères")
-                elif '@' not in reg_email or '.' not in reg_email:
+                elif '@' not in reg_email:
                     st.error("Email invalide")
                 else:
                     success, message = register_user(reg_username, reg_password, reg_email)
                     if success:
                         st.success(message)
                         st.balloons()
-                        st.info("✅ Connectez-vous maintenant !")
+                        st.info("✅ Connectez-vous maintenant pour commencer !")
                     else:
-                        st.error(f"❌ {message}")
+                        st.error(message)
             else:
                 st.warning("Veuillez remplir tous les champs")
     
     st.markdown("---")
     st.markdown("""
-    ### 🎯 Pourquoi Frejus AI ?
+    ### 🎯 Pourquoi choisir Frejus AI ?
     
-    - 💬 **Conversations illimitées**
-    - 💻 **Mode Codage Expert**
-    - 🎨 **Mode Design Créatif**
-    - 💾 **Sauvegarde automatique**
-    - 🔐 **100% Sécurisé**
-    - 🆓 **Totalement gratuit**
-    - 🔄 **Connexion persistante**
+    - 💬 **Conversations illimitées** : Discutez sans restrictions
+    - 💻 **Mode Codage Expert** : Code propre et optimisé
+    - 🎨 **Mode Design Créatif** : Interfaces modernes avec animations
+    - 📝 **Sauvegarde automatique** : Ne perdez jamais vos conversations
+    - 🔐 **100% Sécurisé** : Vos données sont protégées
+    - 🆓 **Totalement gratuit** : Pas de carte bancaire requise
+    - ☁️ **Accessible partout** : Sur tous vos appareils
     """)
     
     st.stop()
 
-# --- Interface principale de l'application ---
-# Ce code n'est atteint que si st.session_state.authenticated EST True
-
-# Recharger les conversations si nécessaire (ex: après création/suppression)
+# Interface principale
 if 'conversations' not in st.session_state or st.session_state.get('reload_conversations', True):
     conversations_data = get_user_conversations(st.session_state.user_id)
+    st.session_state.conversations = {conv['id']: conv['name'] for conv in conversations_data}
+    st.session_state.conversations_ids = {conv['name']: conv['id'] for conv in conversations_data}
     if conversations_data:
-        st.session_state.conversations = {conv['id']: conv['name'] for conv in conversations_data}
-        st.session_state.conversations_ids = {conv['name']: conv['id'] for conv in conversations_data}
-        
-        # S'assurer que current_conversation est valide, sinon réinitialiser
-        if st.session_state.get('current_conversation') not in st.session_state.conversations_ids:
-            st.session_state.current_conversation = conversations_data[0]['name']
-            st.session_state.current_conversation_id = conversations_data[0]['id']
-    else:
-        # Gérer le cas où toutes les conversations sont supprimées (ne devrait pas arriver avec la logique actuelle)
-        # ou un nouvel utilisateur sans conversation (corrigé à l'inscription)
-        st.session_state.conversations = {}
-        st.session_state.conversations_ids = {}
-        
+        st.session_state.current_conversation = conversations_data[0]['name']
+        st.session_state.current_conversation_id = conversations_data[0]['id']
     st.session_state.reload_conversations = False
-
-# Assurer qu'il y a toujours au moins une conversation
-if not st.session_state.conversations and st.session_state.user_id:
-    # Si l'utilisateur n'a AUCUNE conversation (par ex. ancien utilisateur avant la MAJ)
-    default_conv = create_conversation(st.session_state.user_id, "Conversation 1")
-    if default_conv:
-        st.session_state.reload_conversations = True
-        st.rerun()
-    else:
-        st.error("Erreur critique : impossible de créer une conversation de base.")
-        st.stop()
 
 # En-tête
 col1, col2, col3 = st.columns([1, 4, 1])
@@ -481,25 +311,27 @@ with col2:
 with col3:
     st.markdown(f"👤 **{st.session_state.username}**")
     if st.button("🚪", key="logout", help="Déconnexion"):
-        # Supprimer la session et le cookie
+        # Supprimer la session de la base de données
         if st.session_state.session_token:
             delete_session(st.session_state.session_token)
-            delete_cookie("frejus_session")
         
-        # Réinitialiser tous les états de session
-        for key in list(st.session_state.keys()):
-            del st.session_state[key]
+        # Nettoyer les query params
+        st.query_params.clear()
         
+        # Réinitialiser l'état
         st.session_state.authenticated = False
-        st.session_state.cookie_checked = False
+        st.session_state.username = None
+        st.session_state.user_id = None
+        st.session_state.session_token = None
+        st.session_state.persistent_token = None
         
-        st.success("✅ Déconnexion réussie")
         st.rerun()
 
 # Sidebar
 with st.sidebar:
     st.header("⚙️ Configuration")
-    st.success("✅ **Connecté** : Session active")
+    
+    st.success("✅ **API activée** : Prêt à l'emploi !")
     
     st.markdown("---")
     st.markdown("### 📚 Mode de conversation")
@@ -511,37 +343,43 @@ with st.sidebar:
     )
     
     if model_category == "💬 Conversation générale":
-        model = st.selectbox("Modèle IA", ["llama-3.1-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768", "gemma2-9b-it"])
+        model = st.selectbox(
+            "Modèle IA", 
+            ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768", "gemma2-9b-it"],
+            help="Modèles optimisés pour la conversation"
+        )
         st.session_state.code_mode = False
         st.session_state.design_mode = False
     elif model_category == "💻 Codage expert":
-        model = st.selectbox("Modèle IA", ["llama-3.1-70b-versatile", "mixtral-8x7b-32768"])
+        model = st.selectbox(
+            "Modèle IA", 
+            ["llama-3.3-70b-versatile", "mixtral-8x7b-32768"],
+            help="Modèles spécialisés en programmation"
+        )
         st.session_state.code_mode = True
         st.session_state.design_mode = False
-        st.info("🔧 Mode codage actif")
+        st.info("🔧 **Mode actif** : Code propre, commenté et optimisé")
     else:
-        model = st.selectbox("Modèle IA", ["llama-3.1-70b-versatile", "mixtral-8x7b-32768"])
+        model = st.selectbox(
+            "Modèle IA", 
+            ["llama-3.3-70b-versatile", "mixtral-8x7b-32768"],
+            help="Modèles créatifs pour le design"
+        )
         st.session_state.design_mode = True
         st.session_state.code_mode = False
-        st.success("🎨 Mode design actif")
+        st.success("🎨 **Mode actif** : Interfaces modernes et animations")
     
     st.markdown("---")
     st.markdown("### 💬 Mes conversations")
     
     if st.session_state.conversations:
         conversation_names = list(st.session_state.conversations.values())
-        
-        # Gérer le cas où la conversation actuelle n'existe plus
-        current_index = 0
-        if 'current_conversation' in st.session_state and st.session_state.current_conversation in conversation_names:
-            current_index = conversation_names.index(st.session_state.current_conversation)
-        else:
-            # Si la conversation n'existe pas, prendre la première
-            st.session_state.current_conversation = conversation_names[0]
-            st.session_state.current_conversation_id = st.session_state.conversations_ids[conversation_names[0]]
-
-        
-        selected_conv = st.selectbox("Conversation active", conversation_names, index=current_index, label_visibility="collapsed")
+        selected_conv = st.selectbox(
+            "Conversation active", 
+            conversation_names, 
+            index=conversation_names.index(st.session_state.current_conversation),
+            label_visibility="collapsed"
+        )
         
         if selected_conv != st.session_state.current_conversation:
             st.session_state.current_conversation = selected_conv
@@ -550,7 +388,7 @@ with st.sidebar:
     
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("➕ Nouvelle", use_container_width=True):
+        if st.button("➕ Nouvelle", use_container_width=True, help="Créer une nouvelle conversation"):
             conv_count = len(st.session_state.conversations) + 1
             new_conv = create_conversation(st.session_state.user_id, f"Conversation {conv_count}")
             if new_conv:
@@ -558,7 +396,7 @@ with st.sidebar:
                 st.rerun()
     
     with col2:
-        if st.button("🗑️ Supprimer", use_container_width=True):
+        if st.button("🗑️ Supprimer", use_container_width=True, help="Supprimer la conversation actuelle"):
             if len(st.session_state.conversations) > 1:
                 delete_conversation(st.session_state.current_conversation_id)
                 st.session_state.reload_conversations = True
@@ -566,14 +404,16 @@ with st.sidebar:
             else:
                 st.error("Gardez au moins 1 conversation")
     
-    new_name = st.text_input("Renommer", value=st.session_state.current_conversation, key="rename")
+    new_name = st.text_input(
+        "Renommer", 
+        value=st.session_state.current_conversation, 
+        key="rename",
+        help="Cliquez hors du champ pour sauvegarder"
+    )
     if new_name != st.session_state.current_conversation and new_name.strip():
-        if new_name not in st.session_state.conversations_ids:
-            rename_conversation(st.session_state.current_conversation_id, new_name)
-            st.session_state.reload_conversations = True
-            st.rerun()
-        else:
-            st.warning("Ce nom existe déjà.")
+        rename_conversation(st.session_state.current_conversation_id, new_name)
+        st.session_state.reload_conversations = True
+        st.rerun()
     
     st.markdown("---")
     msg_count = len(get_conversation_messages(st.session_state.current_conversation_id))
@@ -582,42 +422,38 @@ with st.sidebar:
 
 # Fonctions utilitaires
 def render_html_if_present(response_text):
-    """Affiche le texte et les aperçus HTML de manière entrelacée"""
     html_pattern = r'```html\n(.*?)\n```'
-    parts = re.split(html_pattern, response_text, flags=re.DOTALL)
+    html_matches = re.findall(html_pattern, response_text, re.DOTALL)
     
-    if len(parts) == 1: # Pas de HTML trouvé
-        return False
-    
-    for i, part in enumerate(parts):
-        if i % 2 == 0:
-            # C'est du texte normal
-            if part.strip():
-                st.markdown(part)
-        else:
-            # C'est le code HTML
-            html_code = part
-            # Utiliser un hash du code pour une clé unique
-            key_hash = hashlib.md5(html_code.encode()).hexdigest()
-            if st.button(f"👁️ Aperçu", key=f"render_{i}_{key_hash}", type="primary"):
+    if html_matches:
+        for i, html_code in enumerate(html_matches):
+            st.markdown(response_text.split('```html')[0])
+            if st.button(f"👁️ Aperçu visuel", key=f"render_{i}_{hash(html_code)}", type="primary"):
                 components.html(html_code, height=600, scrolling=True)
-            with st.expander(f"📝 Code"):
+            with st.expander(f"📝 Voir le code source"):
                 st.code(html_code, language='html')
-    return True
+        return True
+    return False
 
 def call_groq_api(messages, model, code_mode=False, design_mode=False):
     url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
+    }
     
     clean_messages = []
     
     if code_mode:
-        clean_messages.append({"role": "system", "content": "Tu es un expert en programmation. Tu fournis des réponses claires, du code propre, commenté et complet. Tu es spécialisé dans tous les langages de programmation."})
+        clean_messages.append({
+            "role": "system", 
+            "content": "Tu es un expert en programmation de niveau senior. Fournis du code propre, bien commenté et optimisé selon les meilleures pratiques. Explique tes choix techniques."
+        })
     elif design_mode:
-        clean_messages.append({"role": "system", "content": "Tu es un expert en design UI/UX et en développement frontend. Si on te demande de créer quelque chose, tu réponds *exclusivement* avec du code HTML, CSS et JS dans un bloc ```html. Si on te pose une question, tu réponds normalement en texte."})
-    else:
-        clean_messages.append({"role": "system", "content": "Tu es un assistant IA polyvalent nommé Frejus AI. Tu es serviable, créatif et honnête."})
-
+        clean_messages.append({
+            "role": "system", 
+            "content": "Tu es un expert UI/UX et développeur front-end créatif. Pour les QUESTIONS: réponds en texte. Pour CRÉER un design: génère du code HTML/CSS/JS dans des balises ```html avec animations, icônes Font Awesome, et design moderne."
+        })
     
     for msg in messages:
         clean_messages.append({"role": msg["role"], "content": msg["content"]})
@@ -633,13 +469,18 @@ def call_groq_api(messages, model, code_mode=False, design_mode=False):
         response = requests.post(url, headers=headers, json=data, timeout=60)
         response.raise_for_status()
         result = response.json()
-        return result["choices"][0]["message"]["content"] if "choices" in result else "❌ Erreur de réponse de l'API"
+        return result["choices"][0]["message"]["content"] if "choices" in result else "❌ Erreur de réponse"
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 401:
+            return "❌ Erreur d'authentification API. Contactez l'administrateur."
+        elif e.response.status_code == 429:
+            return "❌ Limite d'utilisation atteinte. Réessayez dans quelques instants."
+        else:
+            return f"❌ Erreur serveur: {e.response.status_code}"
     except requests.exceptions.Timeout:
-        return "❌ Erreur : Le délai de réponse de l'API (60s) a été dépassé."
-    except requests.exceptions.RequestException as e:
-        return f"❌ Erreur de connexion à l'API: {str(e)}"
+        return "❌ Délai d'attente dépassé. Vérifiez votre connexion internet."
     except Exception as e:
-        return f"❌ Erreur inconnue: {str(e)}"
+        return f"❌ Erreur inattendue: {str(e)}"
 
 # Afficher les messages
 messages = get_conversation_messages(st.session_state.current_conversation_id)
@@ -653,7 +494,7 @@ for msg in messages:
             st.markdown(msg["content"])
 
 # Input utilisateur
-if prompt := st.chat_input("💬 Écrivez votre message..."):
+if prompt := st.chat_input("💬 Écrivez votre message ici..."):
     save_message(st.session_state.current_conversation_id, "user", prompt)
     
     with st.chat_message("user"):
@@ -671,22 +512,35 @@ if prompt := st.chat_input("💬 Écrivez votre message..."):
                 st.session_state.get("design_mode", False)
             )
             
-            if st.session_state.get("design_mode"):
-                if not render_html_if_present(response):
-                    st.markdown(response)
-            else:
+            if st.session_state.get("design_mode") and not render_html_if_present(response):
+                st.markdown(response)
+            elif not st.session_state.get("design_mode"):
                 st.markdown(response)
     
     save_message(st.session_state.current_conversation_id, "assistant", response)
     st.rerun()
 
+# Message de bienvenue
 if not messages:
     st.info("""
     ### 👋 Bienvenue dans Frejus AI !
     
-    **Suggestions pour commencer :**
+    **Quelques suggestions pour commencer :**
     
-    💬 **Conversation** : "Explique-moi la physique quantique"
-    💻 **Codage** : "Crée une API REST en Python"
-    🎨 **Design** : "Design une carte de profil moderne"
+    🗣️ **Mode Conversation** :
+    - "Explique-moi la physique quantique simplement"
+    - "Donne-moi 5 idées de business en 2024"
+    - "Comment apprendre Python efficacement ?"
+    
+    💻 **Mode Codage** :
+    - "Crée une API REST en Python avec FastAPI"
+    - "Optimise ce code [coller votre code]"
+    - "Explique-moi les design patterns"
+    
+    🎨 **Mode Design** :
+    - "Crée une carte de profil utilisateur moderne"
+    - "Design un formulaire de contact élégant"
+    - "Fais-moi une page de tarification"
+    
+    ✨ **Astuce** : Soyez précis dans vos demandes pour de meilleurs résultats !
     """)
