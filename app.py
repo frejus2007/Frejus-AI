@@ -61,7 +61,7 @@ def set_cookie(name, value, days=30):
 def get_cookie(key="cookie_getter"):
     """
     Récupérer un cookie via JavaScript de manière fiable en utilisant un composant
-    Streamlit avec une clé et une valeur par défaut.
+    Streamlit avec une clé.
     """
     js_code = f"""
     <script>
@@ -82,9 +82,9 @@ def get_cookie(key="cookie_getter"):
         }}, "*");
     </script>
     """
-    # Ce composant renvoie la valeur définie par postMessage
-    # default="" garantit qu'il renvoie une chaîne vide au lieu de None au premier chargement
-    cookie_value = components.html(js_code, height=0, key=key, default="")
+    # --- CORRECTION ---
+    # Suppression de 'default=""' qui causait le TypeError
+    cookie_value = components.html(js_code, height=0, key=key)
     return cookie_value
 
 def delete_cookie(name):
@@ -316,20 +316,17 @@ if 'cookie_checked' not in st.session_state:
     st.session_state.cookie_checked = False
 
 
-# --- CORRECTION STRUCTURELLE ---
-# Toute la logique de vérification des cookies ne s'exécute que si
-# l'utilisateur n'est PAS déjà authentifié.
+# Logique de vérification des cookies (uniquement si non authentifié)
 if not st.session_state.authenticated:
     
-    # 1. Appeler le composant pour récupérer la valeur
+    # 1. Appeler le composant pour récupérer la valeur (retourne None au 1er run)
     cookie_value = get_cookie()
     
-    # 2. Si on n'a PAS ENCORE vérifié (ou si la valeur était vide au tour d'avant)
+    # 2. Si on n'a PAS ENCORE vérifié
     if not st.session_state.cookie_checked:
         
-        # 3. Si le cookie a une valeur (reçue du JS), on tente la connexion
+        # 3. Si le cookie a une valeur (reçue du JS)
         if cookie_value and isinstance(cookie_value, str) and cookie_value.strip():
-            # On a une VRAIE valeur, on la vérifie
             st.session_state.cookie_checked = True # Marquer comme vérifié
             user = get_session(cookie_value)
             if user:
@@ -338,13 +335,16 @@ if not st.session_state.authenticated:
                 st.session_state.user_id = user['id']
                 st.session_state.session_token = cookie_value
                 st.rerun()
-        elif cookie_value is None or (isinstance(cookie_value, str) and not cookie_value.strip()):
-            # La valeur est vide (soit par défaut, soit le cookie est vide)
-            # Ne pas marquer cookie_checked=True, pour qu'on puisse réessayer au prochain re-run (celui du JS)
+        elif cookie_value is None:
+            # 1er run, cookie_value est None. C'est normal.
+            # Ne pas marquer cookie_checked=True, pour laisser le JS s'exécuter.
             pass
+        elif isinstance(cookie_value, str) and not cookie_value.strip():
+            # Le JS a tourné et a renvoyé "", le cookie est vide.
+            st.session_state.cookie_checked = True # Marquer comme vérifié
         else:
-            # Valeur invalide ou autre type, marquer comme vérifié pour éviter les boucles
-            st.session_state.cookie_checked = True
+            # Valeur invalide ou autre type
+            st.session_state.cookie_checked = True # Marquer comme vérifié
 
 # Page de connexion/inscription
 # S'affiche si l'authentification (normale ou par cookie) a échoué
