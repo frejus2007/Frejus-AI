@@ -58,7 +58,6 @@ def set_cookie(name, value, days=30):
     """
     components.html(js_code, height=0)
 
-# --- CORRECTION 1: Rendre get_cookie fiable ---
 def get_cookie(key="cookie_getter"):
     """
     Récupérer un cookie via JavaScript de manière fiable en utilisant un composant
@@ -97,7 +96,7 @@ def delete_cookie(name):
     """
     components.html(js_code, height=0)
 
-# --- Fonctions d'authentification sécurisées (Modifiées) ---
+# --- Fonctions d'authentification sécurisées ---
 
 def get_password_hash(password):
     """Génère un hachage sécurisé bcrypt pour un mot de passe"""
@@ -192,14 +191,14 @@ def delete_session(token):
         return False
 
 def register_user(username, password, email):
-    """Inscrire un nouvel utilisateur avec hachage bcrypt (Modifié)"""
+    """Inscrire un nouvel utilisateur avec hachage bcrypt"""
     try:
         # Vérifier si le nom d'utilisateur existe
         result_user = supabase.table('users').select('id').eq('username', username).execute()
         if result_user.data:
             return False, "Nom d'utilisateur déjà pris"
         
-        # Vérifier si l'email existe (Ajouté)
+        # Vérifier si l'email existe
         result_email = supabase.table('users').select('id').eq('email', email).execute()
         if result_email.data:
             return False, "Email déjà utilisé"
@@ -226,7 +225,7 @@ def register_user(username, password, email):
         return False, f"Erreur: {str(e)}"
 
 def login_user(username, password):
-    """Connecter un utilisateur avec vérification bcrypt (Modifié)"""
+    """Connecter un utilisateur avec vérification bcrypt"""
     try:
         result = supabase.table('users').select('*').eq('username', username).execute()
         
@@ -316,27 +315,39 @@ if 'session_token' not in st.session_state:
 if 'cookie_checked' not in st.session_state:
     st.session_state.cookie_checked = False
 
-# --- CORRECTION 2: Vérification robuste du cookie ---
-# Exécuter get_cookie() en dehors de la condition if.
-# Grâce au 'default=""', cookie_value sera "" au premier chargement,
-# puis la vraie valeur (ou "") au re-run.
-cookie_value = get_cookie()
 
-# Vérifier le cookie au premier chargement
-if not st.session_state.cookie_checked and not st.session_state.authenticated:
-    st.session_state.cookie_checked = True
+# --- CORRECTION STRUCTURELLE ---
+# Toute la logique de vérification des cookies ne s'exécute que si
+# l'utilisateur n'est PAS déjà authentifié.
+if not st.session_state.authenticated:
     
-    # Vérifier si c'est une chaîne de caractères AVANT d'appeler .strip()
-    if cookie_value and isinstance(cookie_value, str) and cookie_value.strip():
-        user = get_session(cookie_value)
-        if user:
-            st.session_state.authenticated = True
-            st.session_state.username = user['username']
-            st.session_state.user_id = user['id']
-            st.session_state.session_token = cookie_value
-            st.rerun()
+    # 1. Appeler le composant pour récupérer la valeur
+    cookie_value = get_cookie()
+    
+    # 2. Si on n'a PAS ENCORE vérifié (ou si la valeur était vide au tour d'avant)
+    if not st.session_state.cookie_checked:
+        
+        # 3. Si le cookie a une valeur (reçue du JS), on tente la connexion
+        if cookie_value and isinstance(cookie_value, str) and cookie_value.strip():
+            # On a une VRAIE valeur, on la vérifie
+            st.session_state.cookie_checked = True # Marquer comme vérifié
+            user = get_session(cookie_value)
+            if user:
+                st.session_state.authenticated = True
+                st.session_state.username = user['username']
+                st.session_state.user_id = user['id']
+                st.session_state.session_token = cookie_value
+                st.rerun()
+        elif cookie_value is None or (isinstance(cookie_value, str) and not cookie_value.strip()):
+            # La valeur est vide (soit par défaut, soit le cookie est vide)
+            # Ne pas marquer cookie_checked=True, pour qu'on puisse réessayer au prochain re-run (celui du JS)
+            pass
+        else:
+            # Valeur invalide ou autre type, marquer comme vérifié pour éviter les boucles
+            st.session_state.cookie_checked = True
 
 # Page de connexion/inscription
+# S'affiche si l'authentification (normale ou par cookie) a échoué
 if not st.session_state.authenticated:
     col1, col2 = st.columns([1, 5])
     with col1:
@@ -428,6 +439,7 @@ if not st.session_state.authenticated:
     st.stop()
 
 # --- Interface principale de l'application ---
+# Ce code n'est atteint que si st.session_state.authenticated EST True
 
 # Recharger les conversations si nécessaire (ex: après création/suppression)
 if 'conversations' not in st.session_state or st.session_state.get('reload_conversations', True):
@@ -521,8 +533,13 @@ with st.sidebar:
         
         # Gérer le cas où la conversation actuelle n'existe plus
         current_index = 0
-        if st.session_state.current_conversation in conversation_names:
+        if 'current_conversation' in st.session_state and st.session_state.current_conversation in conversation_names:
             current_index = conversation_names.index(st.session_state.current_conversation)
+        else:
+            # Si la conversation n'existe pas, prendre la première
+            st.session_state.current_conversation = conversation_names[0]
+            st.session_state.current_conversation_id = st.session_state.conversations_ids[conversation_names[0]]
+
         
         selected_conv = st.selectbox("Conversation active", conversation_names, index=current_index, label_visibility="collapsed")
         
@@ -565,7 +582,7 @@ with st.sidebar:
 
 # Fonctions utilitaires
 def render_html_if_present(response_text):
-    """Affiche le texte et les aperçus HTML de manière entrelacée (Modifié)"""
+    """Affiche le texte et les aperçus HTML de manière entrelacée"""
     html_pattern = r'```html\n(.*?)\n```'
     parts = re.split(html_pattern, response_text, flags=re.DOTALL)
     
