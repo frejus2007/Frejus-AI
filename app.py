@@ -395,7 +395,7 @@ with col1:
     st.image("https://api.dicebear.com/7.x/bottts/svg?seed=frejus", width=80)
 with col2:
     st.title("🧠 Frejus AI")
-    st.markdown("*Assistant intelligent propulsé par Groq*")
+    st.markdown("*Assistant intelligent développé par Fréjus AZOMBADE*")
 with col3:
     st.markdown(f"👤 **{st.session_state.username}**")
     if st.button("🚪", key="logout", help="Déconnexion"):
@@ -575,3 +575,4 @@ if not messages:
     💻 **Codage** : "Crée une API REST en Python"
     🎨 **Design** : "Design une carte de profil moderne"
     """)
+
